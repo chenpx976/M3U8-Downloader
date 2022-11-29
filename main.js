@@ -357,113 +357,8 @@ app.on('ready', () => {
     session.defaultSession.webRequest.onBeforeSendHeaders(webRequestReq);
     session.defaultSession.webRequest.onResponseStarted(webRequestRsp);
 
-    //百度统计代码
-    false && (async () => {
-        try {
-            checkUpdate();
-            _updateInterval = setInterval(checkUpdate, 600000);
-
-            let HMACCOUNT = nconf.get('HMACCOUNT');
-            if (!HMACCOUNT) HMACCOUNT = '';
-            const {
-                headers
-            } = await got("http://hm.baidu.com/hm.js?300991eff395036b1ba22ae155143ff3", {
-                headers: {
-                    "Referer": referer,
-                    "Cookie": "HMACCOUNT=" + HMACCOUNT
-                }
-            });
-            try {
-                HMACCOUNT = headers['set-cookie'] && headers['set-cookie'][0].match(/HMACCOUNT=(.*?);/i)[1];
-                if (HMACCOUNT) {
-                    nconf.set('HMACCOUNT', HMACCOUNT);
-                    nconf.save();
-                }
-            } catch (error_) {
-                logger.error(error_)
-            }
-            await got(`http://hm.baidu.com/hm.gif?hca=${HMACCOUNT}&cc=1&ck=1&cl=24-bit&ds=1920x1080&vl=977&ep=6621%2C1598&et=3&ja=0&ln=zh-cn&lo=0&lt=${(new Date().getTime() / 1000)}&rnd=0&si=300991eff395036b1ba22ae155143ff3&v=1.2.74&lv=3&sn=0&r=0&ww=1920&u=${encodeURIComponent(referer)}`, {
-                headers: {
-                    "Referer": referer,
-                    "Cookie": "HMACCOUNT=" + HMACCOUNT
-                }
-            });
-            await got(`http://hm.baidu.com/hm.gif?cc=1&ck=1&cl=24-bit&ds=1920x1080&vl=977&et=0&ja=0&ln=zh-cn&lo=0&rnd=0&si=300991eff395036b1ba22ae155143ff3&v=1.2.74&lv=1&sn=0&r=0&ww=1920&ct=!!&tt=M3U8Soft-Client`, {
-                headers: {
-                    "Referer": referer,
-                    "Cookie": "HMACCOUNT=" + HMACCOUNT
-                }
-            });
-            logger.info("call baidu-tong-ji end.");
-        } catch (error) {
-            logger.error(error)
-        }
-    })();
     return;
 
-    const EMPTY_STRING = '';
-    const systemConfig = {
-        'all-proxy': EMPTY_STRING,
-        'allow-overwrite': false,
-        'auto-file-renaming': true,
-        'check-certificate': false,
-        'continue': false,
-        'dir': app.getPath('downloads'),
-        'max-concurrent-downloads': 120,
-        'max-connection-per-server': 5,
-        'max-download-limit': 0,
-        'max-overall-download-limit': 0,
-        'max-overall-upload-limit': '256K',
-        'min-split-size': '1M',
-        'no-proxy': EMPTY_STRING,
-        'pause': true,
-        'rpc-listen-port': 16801,
-        'rpc-secret': EMPTY_STRING,
-        'seed-ratio': 1,
-        'seed-time': 60,
-        'split': 10,
-        'user-agent': 'Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.61 Safari/537.36Transmission/2.94'
-    }
-
-    let cmds = [aria2_app, `--conf-path=${aria2_config}`];
-    cmds = [...cmds, ...transformConfig(systemConfig)];
-    logger.debug(cmds.join(' '));
-
-    let instance = forever.start(cmds, {
-        max: 10,
-        parser: function (command, args) {
-            logger.debug(command, args);
-            return {
-                command: command,
-                args: args
-            }
-        },
-        silent: false
-    });
-    instance.on('start', function (process, data) {
-        let aria2 = new Aria2({
-            port: 16801
-        });
-        aria2.open();
-        aria2.on('close', (e) => {
-            console.log('----aria2 connect close----');
-            setTimeout(() => aria2.open(), 100);
-        });
-        aria2.on("onDownloadComplete", downloadComplete);
-        aria2Client = aria2;
-
-        setInterval(() => {
-            aria2Client.call('getGlobalStat').then((result) => {
-                if (result && result['downloadSpeed']) {
-                    var _speed = '';
-                    var speed = parseInt(result['downloadSpeed']);
-                    _speed = (speed < 1024 * 1024) ? Math.round(speed / 1024) + ' KB/s' : (speed / 1024 / 1024).toFixed(2) + ' MiB/s'
-                    mainWindow.webContents.send('message', { downloadSpeed: _speed });
-                }
-            });
-        }, 1500);
-    });
-    aria2Server = instance;
 });
 
 function downloadComplete(e) {
@@ -948,7 +843,7 @@ async function startDownload(object, iidx) {
 
 
     //并发 2 个线程下载
-    var tsQueues = async.queue(queue_callback, 5);
+    var tsQueues = async.queue(queue_callback, 100);
 
     let count_seg = parser.manifest.segments.length;
     let count_downloaded = 0;
