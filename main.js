@@ -51,7 +51,7 @@ let proxy_agent = null;
 
 let globalConfigSaveVideoDir = '';
 
-const httpTimeout = { socket: 600000, request: 600000, response: 600000 };
+const httpTimeout = { socket: 30000, request: 60000, response: 60000 };
 
 const referer = `https://tools.heisir.cn/M3U8Soft-Client?v=${package_self.version}`;
 
@@ -152,7 +152,7 @@ function createWindow() {
   mainWindow.setMenu(null)
   // 加载index.html文件
   mainWindow.loadFile(path.join(__dirname, 'start.html'));
-  isDev && mainWindow.openDevTools();
+  // isDev && mainWindow.openDevTools();
   // 当 window 被关闭，这个事件会被触发。
   mainWindow.on('closed', () => {
     // 取消引用 window 对象，如果你的应用支持多窗口的话，
@@ -277,6 +277,9 @@ app.on('ready', () => {
   tray.setContextMenu(contextMenu);
   try {
     configVideos = JSON.parse(fs.readFileSync(globalConfigVideoPath));
+    // 过滤掉已完成的任务，避免重启后还显示在列表中
+    configVideos = configVideos.filter(v => v.status !== '已完成');
+    fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
   } catch (error) {
     logger.error(error);
   }
@@ -312,7 +315,7 @@ app.on('ready', () => {
       logger.error(error)
     }
   })();
-  GA4.sendEvent('open', { time: dateFormat(new Date(), "yyyy-mm-dd HH:MM:ss") });
+  // GA4.sendEvent('open', { time: dateFormat(new Date(), "yyyy-mm-dd HH:MM:ss") });
   return;
 
   const EMPTY_STRING = '';
@@ -836,7 +839,7 @@ async function startDownload(object, iidx) {
 
   logger.info(dir);
 
-  GA4.sendEvent('download', { time: dateFormat(new Date(), "yyyy-mm-dd HH:MM:ss") });
+  // GA4.sendEvent('download', { time: dateFormat(new Date(), "yyyy-mm-dd HH:MM:ss") });
 
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -876,7 +879,7 @@ async function startDownload(object, iidx) {
 
 
   //并发 2 个线程下载
-  var tsQueues = async.queue(queue_callback, 10);
+  var tsQueues = async.queue(queue_callback, 50);
 
   let count_seg = parser.manifest.segments.length;
   let count_downloaded = 0;
@@ -926,7 +929,7 @@ async function startDownload(object, iidx) {
     };
     qo.catch = function () {
       if (this.retry < 10) {
-        tsQueues.push(this);
+        setTimeout(() => tsQueues.push(this), 1000);
       }
       else {
         globalCond[id] = false;
@@ -965,8 +968,12 @@ async function startDownload(object, iidx) {
     let outPathMP4 = path.join(dir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, "") + '.mp4');
     let outPathMP4_ = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, "") + '.mp4');
     if (fs.existsSync(ffmpegPath)) {
-      let ffmpegInputStream = new FFmpegStreamReadable(null);
-      new ffmpeg(ffmpegInputStream)
+      let concatList = fileSegments.map(f => `file '${f.replace(/'/g, "'\\''")}'`).join('\n');
+      let concatPath = path.join(dir, 'concat_list.txt');
+      fs.writeFileSync(concatPath, concatList);
+
+      new ffmpeg(concatPath)
+        .inputOptions(['-f', 'concat', '-safe', '0'])
         .setFfmpegPath(ffmpegPath)
         .videoCodec('copy')
         .audioCodec('copy')
@@ -989,28 +996,23 @@ async function startDownload(object, iidx) {
           if (video.taskIsDelTs) {
             let index_path = path.join(dir, 'index.txt');
             fs.existsSync(index_path) && fs.unlinkSync(index_path);
+            let concat_path = path.join(dir, 'concat_list.txt');
+            fs.existsSync(concat_path) && fs.unlinkSync(concat_path);
+            let aes_path = path.join(dir, 'aes.key');
+            fs.existsSync(aes_path) && fs.unlinkSync(aes_path);
             fileSegments.forEach(item => fs.existsSync(item) && fs.unlinkSync(item));
-            fs.rmdirSync(dir);
+            fs.rmSync(dir, { recursive: true, force: true });
+          }
+          // 任务完成后从列表移除，避免重启后还显示
+          let nIdx = configVideos.indexOf(video);
+          if (nIdx !== -1) {
+            configVideos.splice(nIdx, 1);
           }
           fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
         })
         .on('progress', (info) => {
           logger.info(JSON.stringify(info));
         });
-
-      for (let i = 0; i < fileSegments.length; i++) {
-        let percent = Number.parseInt((i + 1) * 100 / fileSegments.length);
-        video.status = `合并中[${percent}%]`;
-        mainWindow.webContents.send('task-notify-end', video);
-        let filePath = fileSegments[i];
-        fs.existsSync(filePath) && ffmpegInputStream.push(fs.readFileSync(filePath));
-        while (ffmpegInputStream._readableState.length > 0) {
-          await sleep(100);
-        }
-        console.log("push " + percent);
-      }
-      console.log("push(null) end");
-      ffmpegInputStream.push(null);
     }
     else {
       video.videopath = outPathMP4;
@@ -1450,7 +1452,7 @@ ipcMain.on('open-select-ts-dir', function (event, arg) {
 
 ipcMain.on('start-merge-ts', async function (event, task) {
   if (!task) return;
-  GA4.sendEvent('video_merge', { time: dateFormat(new Date(), "yyyy-mm-dd HH:MM:ss") });
+  // GA4.sendEvent('video_merge', { time: dateFormat(new Date(), "yyyy-mm-dd HH:MM:ss") });
   let name = task.name ? task.name : (new Date().getTime() + '');
 
   let dir = path.join(globalConfigSaveVideoDir, name);

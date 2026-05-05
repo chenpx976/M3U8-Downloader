@@ -21,7 +21,7 @@ const GA4 = {
     const old_uuid = config.client_uuid;
     config.client_uuid = old_uuid || crypto.randomUUID();
     if (!old_uuid) {
-      existsSync(!globalConfigDir) && mkdirSync(globalConfigDir);
+      !existsSync(globalConfigDir) && mkdirSync(globalConfigDir);
       writeFileSync(globalConfigPath, JSON.stringify(config), { encoding: 'utf-8' });
     }
     return config.client_uuid;
