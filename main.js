@@ -27,7 +27,7 @@ const GA4 = require('./GA4');
 contextMenu({ showCopyImage: false, showCopyImageAddress: false, showInspectElement: false, showServices: false });
 
 if (!isDev) {
-  ffmpegPath = ffmpegPath.replace('app.asar/', '').replace('app.asar\\', '');
+  ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
 }
 
 let isdelts = true;
@@ -277,9 +277,6 @@ app.on('ready', () => {
   tray.setContextMenu(contextMenu);
   try {
     configVideos = JSON.parse(fs.readFileSync(globalConfigVideoPath));
-    // 过滤掉已完成的任务，避免重启后还显示在列表中
-    configVideos = configVideos.filter(v => v.status !== '已完成');
-    fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
   } catch (error) {
     logger.error(error);
   }
@@ -1002,11 +999,6 @@ async function startDownload(object, iidx) {
             fs.existsSync(aes_path) && fs.unlinkSync(aes_path);
             fileSegments.forEach(item => fs.existsSync(item) && fs.unlinkSync(item));
             fs.rmSync(dir, { recursive: true, force: true });
-          }
-          // 任务完成后从列表移除，避免重启后还显示
-          let nIdx = configVideos.indexOf(video);
-          if (nIdx !== -1) {
-            configVideos.splice(nIdx, 1);
           }
           fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
         })
