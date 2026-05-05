@@ -7,9 +7,9 @@ const { Parser } = require('m3u8-parser');
 const fs = require('fs');
 const async = require('async');
 const dateFormat = require('dateformat');
-const download = require('download');
 const crypto = require('crypto');
 const got = require('got');
+const { pipeline } = require('stream/promises');
 const { Readable } = require('stream');
 const ffmpeg = require('fluent-ffmpeg');
 const package_self = require('./package.json');
@@ -52,6 +52,56 @@ let proxy_agent = null;
 let globalConfigSaveVideoDir = '';
 
 const httpTimeout = { socket: 30000, request: 60000, response: 60000 };
+
+// 下载速度统计
+let globalDownloadBytes = 0;
+let globalLastSpeed = '0 KB/s';
+
+// 检测当前网络环境（Wi-Fi / 以太网）
+function getNetworkType() {
+  const interfaces = os.networkInterfaces();
+  // 找非内部、有 IPv4 的活跃接口
+  for (const [name, addrs] of Object.entries(interfaces)) {
+    const active = addrs.find(a => !a.internal && a.family === 'IPv4');
+    if (active) {
+      if (process.platform === 'darwin') {
+        try {
+          const output = require('child_process').execSync(`ifconfig ${name} 2>/dev/null | grep media`, { encoding: 'utf8', timeout: 2000 });
+          if (output.includes('Wi-Fi') || output.includes('IEEE802.11') || output.includes('wireless')) {
+            return `${name} (Wi-Fi)`;
+          } else if (output.includes('Ethernet') || output.includes('autoselect')) {
+            return `${name} (以太网)`;
+          }
+        } catch (e) {}
+        return `${name} (网络)`;
+      }
+      return `${name} (网络)`;
+    }
+  }
+  return '无网络';
+}
+
+// 定时计算下载速度并发送
+setInterval(() => {
+  if (globalDownloadBytes > 0) {
+    const speed = globalDownloadBytes;
+    globalDownloadBytes = 0;
+    if (speed < 1024) {
+      globalLastSpeed = speed + ' B/s';
+    } else if (speed < 1024 * 1024) {
+      globalLastSpeed = (speed / 1024).toFixed(1) + ' KB/s';
+    } else {
+      globalLastSpeed = (speed / 1024 / 1024).toFixed(2) + ' MB/s';
+    }
+  } else {
+    globalLastSpeed = '0 KB/s';
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const netType = getNetworkType();
+    mainWindow.webContents.send('notify-download-speed', globalLastSpeed);
+    mainWindow.webContents.send('notify-network-type', netType);
+  }
+}, 1000);
 
 const referer = `https://tools.heisir.cn/M3U8Soft-Client?v=${package_self.version}`;
 
@@ -120,6 +170,12 @@ try {
   nconf.file({ file: globalConfigPath })
 } catch (error) {
   logger.error('Please correct the mistakes in your configuration file: [%s].\n' + error, configFilePath)
+}
+
+// 默认并发数
+let configConcurrency = parseInt(nconf.get('config_concurrency')) || 30;
+if (configConcurrency < 1 || configConcurrency > 200) {
+  configConcurrency = 30;
 }
 
 
@@ -363,17 +419,6 @@ app.on('ready', () => {
     });
     aria2.on("onDownloadComplete", downloadComplete);
     aria2Client = aria2;
-
-    setInterval(() => {
-      aria2Client.call('getGlobalStat').then((result) => {
-        if (result && result['downloadSpeed']) {
-          var _speed = '';
-          var speed = parseInt(result['downloadSpeed']);
-          _speed = (speed < 1024 * 1024) ? Math.round(speed / 1024) + ' KB/s' : (speed / 1024 / 1024).toFixed(2) + ' MiB/s'
-          mainWindow.webContents.send('notify-download-speed', _speed);
-        }
-      });
-    }, 1500);
   });
   aria2Server = instance;
 });
@@ -690,14 +735,22 @@ class QueueObject {
           }
           //aria2Client && aria2Client.call("addUri", [uri_ts], { dir:that.dir, out: filename + ".dl", split: "16", header: _headers});
           //break;
-          await download(uri_ts, that.dir, { filename: filename + ".dl", timeout: httpTimeout, headers: that.headers, agent: proxy_agent }).catch((err) => {
-            logger.error(err)
+          try {
+            await pipeline(
+              got.stream(uri_ts, { timeout: httpTimeout, headers: that.headers, agent: proxy_agent, https: { rejectUnauthorized: false } }),
+              fs.createWriteStream(filpath_dl)
+            );
+          } catch (err) {
+            logger.error(err);
             if (fs.existsSync(filpath_dl)) fs.unlinkSync(filpath_dl);
-          });
+          }
         }
         if (!fs.existsSync(filpath_dl)) continue;
-        if (fs.statSync(filpath_dl).size <= 0) {
+        const dlSize = fs.statSync(filpath_dl).size;
+        if (dlSize <= 0) {
           fs.unlinkSync(filpath_dl);
+        } else {
+          globalDownloadBytes += dlSize;
         }
 
         if (segment.key != null && segment.key.method != null) {
@@ -738,7 +791,14 @@ class QueueObject {
             }
 
             if (/^http/.test(key_uri)) {
-              await download(key_uri, that.dir, { filename: "aes.key", headers: that.headers, timeout: httpTimeout, agent: proxy_agent }).catch(console.error);
+              try {
+                await pipeline(
+                  got.stream(key_uri, { timeout: httpTimeout, headers: that.headers, agent: proxy_agent, https: { rejectUnauthorized: false } }),
+                  fs.createWriteStream(aes_path)
+                );
+              } catch (err) {
+                console.error(err);
+              }
             }
             else if (/^file:\/\/\//.test(key_uri)) {
               key_uri = key_uri.replace('file:///', '')
@@ -875,8 +935,8 @@ async function startDownload(object, iidx) {
   }
 
 
-  //并发 2 个线程下载
-  var tsQueues = async.queue(queue_callback, 50);
+  // 并发下载
+  var tsQueues = async.queue(queue_callback, configConcurrency);
 
   let count_seg = parser.manifest.segments.length;
   let count_downloaded = 0;
@@ -969,7 +1029,8 @@ async function startDownload(object, iidx) {
       let concatPath = path.join(dir, 'concat_list.txt');
       fs.writeFileSync(concatPath, concatList);
 
-      new ffmpeg(concatPath)
+      new ffmpeg()
+        .input(concatPath)
         .inputOptions(['-f', 'concat', '-safe', '0'])
         .setFfmpegPath(ffmpegPath)
         .videoCodec('copy')
@@ -1132,12 +1193,17 @@ async function startDownloadLive(object) {
 
             //let tsStream = await got.get(uri_ts, {responseType:'buffer', timeout:httpTimeout ,headers:headers}).catch(logger.error).body();
 
-            await download(uri_ts, dir, { filename: filename + ".dl", timeout: httpTimeout, headers: headers, agent: proxy_agent }).catch((err) => {
-              logger.error(err)
+            try {
+              await pipeline(
+                got.stream(uri_ts, { timeout: httpTimeout, headers: headers, agent: proxy_agent, https: { rejectUnauthorized: false } }),
+                fs.createWriteStream(filpath_dl)
+              );
+            } catch (err) {
+              logger.error(err);
               if (fs.existsSync(filpath_dl)) {
                 fs.unlinkSync(filpath_dl);
               }
-            });
+            }
             if (fs.existsSync(filpath_dl)) {
               let stat = fs.statSync(filpath_dl);
               if (stat.size > 0) {
@@ -1316,13 +1382,20 @@ ipcMain.on('get-config-dir', function (event, arg) {
   event.sender.send("get-config-dir-reply", {
     config_save_dir: globalConfigSaveVideoDir,
     config_ffmpeg: ffmpegPath,
-    config_proxy: nconf.get('config_proxy')
+    config_proxy: nconf.get('config_proxy'),
+    config_concurrency: configConcurrency
   });
 })
 ipcMain.on('set-config', function (event, data) {
   nconf.set(data.key, data.value);
   nconf.save();
 
+  if (data.key == 'config_concurrency') {
+    let val = parseInt(data.value);
+    if (val && val >= 1 && val <= 200) {
+      configConcurrency = val;
+    }
+  }
   if (data.key == 'config_proxy') {
     const config_proxy = nconf.get('config_proxy');
     proxy_agent = config_proxy ? {
@@ -1359,7 +1432,7 @@ ipcMain.on('open-config-dir', function (event, arg) {
       globalConfigSaveVideoDir = result.filePaths[0];
       nconf.set('SaveVideoDir', globalConfigSaveVideoDir);
       nconf.save();
-      event.sender.send("get-config-dir-reply", { config_save_dir: globalConfigSaveVideoDir, config_ffmpeg: ffmpegPath });
+      event.sender.send("get-config-dir-reply", { config_save_dir: globalConfigSaveVideoDir, config_ffmpeg: ffmpegPath, config_concurrency: configConcurrency });
     }
   }).catch(err => {
     logger.error(`showOpenDialog ${err}`)

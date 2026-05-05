@@ -73,8 +73,11 @@
                   <el-button class="mybutton" type="danger" icon="el-icon-news" @click="clickClearTask">清空下载任务(
                     {{allVideos.length}} )</el-button>
                 </el-col>
-                <el-col v-show="false" :span="4" :offset="11">
-                  <div class="speed el-icon-download">{{downSpeed}}</div>
+                <el-col :span="6" :offset="9">
+                  <div class="speed-info">
+                    <span class="el-icon-download">{{downSpeed}}</span>
+                    <span style="margin-left: 10px; color: #909399;">{{networkType}}</span>
+                  </div>
                 </el-col>
               </el-row>
               <ul class="list TaskList" style="overflow:auto">
@@ -290,10 +293,22 @@ Referer: http://www.host.com" v-model="headers"></el-input>
                 <el-col :span="4" :offset="1">
                   <span style="line-height: 40px;float: right;">HTTP代理</span>
                 </el-col>
-
                 <el-col :span="9">
                   <el-input placeholder="请输入HTTP代理(如：http://127.0.0.1:7890 )" v-model="config_proxy"
                     @change="proxyChange"></el-input>
+                </el-col>
+              </el-row>
+              <br />
+              <el-row :gutter="8">
+                <el-col :span="2" :offset="1">
+                  <span style="line-height: 40px;float: right;">下载并发</span>
+                </el-col>
+                <el-col :span="4">
+                  <el-input-number v-model="config_concurrency" :min="1" :max="200" :step="5"
+                    @change="concurrencyChange" style="width: 100%;"></el-input-number>
+                </el-col>
+                <el-col :span="4" :offset="1">
+                  <span style="line-height: 40px; color: #909399;">默认30，建议10-50</span>
                 </el-col>
               </el-row>
               <br>

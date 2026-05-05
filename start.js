@@ -16,6 +16,7 @@ const _app = new Vue({
       config_save_dir: '',
       config_ffmpeg: '',
       config_proxy: '',
+      config_concurrency: 30,
       headers: '',
       myKeyIV: '',
       myLocalKeyIV: '',
@@ -29,7 +30,8 @@ const _app = new Vue({
       tsMergeMp4Path: '',
       tsMergeMp4Dir: '',
       tsTaskName: '',
-      downSpeed: '0 MB/s',
+      downSpeed: '0 KB/s',
+      networkType: '检测中...',
       playlists: [],
       playlistUri: '',
       addTaskMessage: ''
@@ -45,6 +47,9 @@ const _app = new Vue({
       ipcRenderer.on('notify-download-speed', function (event, data) {
         that.downSpeed = data;
       });
+      ipcRenderer.on('notify-network-type', function (event, data) {
+        that.networkType = data;
+      });
 
       ipcRenderer.on('get-all-videos-reply', function (event, data) {
         that.allVideos = data;
@@ -53,6 +58,7 @@ const _app = new Vue({
       ipcRenderer.on('get-config-dir-reply', function (event, data) {
         that.config_save_dir = data.config_save_dir;
         that.config_ffmpeg = data.config_ffmpeg;
+        that.config_concurrency = data.config_concurrency || 30;
         data.config_proxy && (that.config_proxy = data.config_proxy);
       });
       ipcRenderer.on('open-select-m3u8-reply', function (event, data) {
@@ -225,6 +231,12 @@ const _app = new Vue({
     },
     proxyChange: function () {
       ipcRenderer.send('set-config', { key: 'config_proxy', value: this.config_proxy });
+    },
+    concurrencyChange: function () {
+      let val = parseInt(this.config_concurrency);
+      if (val && val >= 1 && val <= 200) {
+        ipcRenderer.send('set-config', { key: 'config_concurrency', value: val });
+      }
     },
     m3u8UrlChange: function () {
       this.playlists = [];
